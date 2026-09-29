@@ -41,3 +41,7 @@ Validator kiểm tra cấu trúc contract; nó không thể chứng minh biểu 
 6. Tắt incident bằng `python scripts/inject_incident.py --scenario rag_slow --disable`.
 
 Ảnh dashboard phải nhìn được tên panel, time range, đơn vị và threshold. Báo cáo phải dẫn lại trace ID hoặc log line dùng để giải thích thay đổi.
+
+## Dựng nhanh bằng script trong repo
+
+`python scripts/build_dashboard.py` đọc `data/logs.jsonl` và `config/dashboard.yaml`, rồi ghi `submission/evidence/dashboard.html` gồm đủ 6 panel (đơn vị, 60 phút, đường threshold, trạng thái đạt/vượt ngưỡng và bảng số liệu). Thêm `--watch` để tự dựng lại mỗi `refresh_seconds`, `--end now` để cửa sổ kết thúc tại giờ hiện tại. Mở file HTML trong trình duyệt để chụp evidence `11-dashboard-overview`.

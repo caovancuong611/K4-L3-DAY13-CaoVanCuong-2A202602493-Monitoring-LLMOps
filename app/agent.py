@@ -7,9 +7,19 @@ from dataclasses import dataclass
 from . import metrics
 from .mock_llm import FakeLLM
 from .mock_rag import retrieve
-from .pii import hash_user_id, summarize_text
+from .pii import hash_user_id, scrub_text, summarize_text
 from .prompt_management import resolve_prompt
 from .tracing import get_langfuse_client, observe, propagate_attributes, tracing_enabled
+
+
+def _safe_update(client, method: str, **kwargs) -> None:
+    """Gọi client.update_current_* nếu có; telemetry không bao giờ được làm hỏng request."""
+    update = getattr(client, method, None)
+    if callable(update):
+        try:
+            update(**kwargs)
+        except Exception:  # pragma: no cover - lỗi Langfuse không được ảnh hưởng người dùng
+            pass
 
 
 @dataclass
@@ -51,7 +61,7 @@ class LabAgent:
             },
         ):
             started = time.perf_counter()
-            docs = retrieve(message)
+            docs = self._retrieve(langfuse_client, message)
             prompt = resolve_prompt(
                 langfuse_client,
                 feature=feature,
@@ -71,10 +81,10 @@ class LabAgent:
                 },
                 version=prompt.version,
             )
-            # TODO (CP2): instrument retrieve() and FakeLLM.generate() as child
-            # observations. The nested generation must receive prompt, usage and cost.
+            # Generation là child của root span; prompt managed được gắn qua propagate_attributes
+            # để Langfuse liên kết trace với đúng prompt name/version.
             with propagate_attributes(prompt=prompt.managed_prompt):
-                response = self.llm.generate(prompt.text)
+                response = self._generate(langfuse_client, prompt.text)
             quality_score = self._heuristic_quality(message, response.text, docs)
             latency_ms = int((time.perf_counter() - started) * 1000)
             cost_usd = self._estimate_cost(response.usage.input_tokens, response.usage.output_tokens)
@@ -98,9 +108,51 @@ class LabAgent:
             quality_score=quality_score,
         )
 
+    @observe(name="retrieval", as_type="retriever", capture_input=False, capture_output=False)
+    def _retrieve(self, client, message: str) -> list[str]:
+        # Không capture input/output thô: message có thể chứa PII, chỉ ghi bản đã scrub.
+        _safe_update(client, "update_current_span", input=summarize_text(message))
+        docs = retrieve(message)  # nếu lỗi (tool_fail), @observe tự đánh dấu span ERROR
+        _safe_update(
+            client,
+            "update_current_span",
+            output={"doc_count": len(docs)},
+            metadata={"doc_count": len(docs), "matched": not docs[0].startswith("No domain document")},
+        )
+        return docs
+
+    @observe(name="llm-generate", as_type="generation", capture_input=False, capture_output=False)
+    def _generate(self, client, prompt_text: str):
+        response = self.llm.generate(prompt_text)
+        input_cost, output_cost = self._cost_breakdown(
+            response.usage.input_tokens, response.usage.output_tokens
+        )
+        _safe_update(
+            client,
+            "update_current_generation",
+            model=response.model,
+            # Prompt/answer được scrub trước khi gửi lên Langfuse.
+            input=scrub_text(prompt_text),
+            output=scrub_text(response.text),
+            usage_details={
+                "input": response.usage.input_tokens,
+                "output": response.usage.output_tokens,
+                "total": response.usage.input_tokens + response.usage.output_tokens,
+            },
+            cost_details={
+                "input": input_cost,
+                "output": output_cost,
+                "total": round(input_cost + output_cost, 6),
+            },
+            metadata={"ttft_ms": response.ttft_ms},
+        )
+        return response
+
+    def _cost_breakdown(self, tokens_in: int, tokens_out: int) -> tuple[float, float]:
+        return (tokens_in / 1_000_000) * 3, (tokens_out / 1_000_000) * 15
+
     def _estimate_cost(self, tokens_in: int, tokens_out: int) -> float:
-        input_cost = (tokens_in / 1_000_000) * 3
-        output_cost = (tokens_out / 1_000_000) * 15
+        input_cost, output_cost = self._cost_breakdown(tokens_in, tokens_out)
         return round(input_cost + output_cost, 6)
 
     def _heuristic_quality(self, question: str, answer: str, docs: list[str]) -> float:

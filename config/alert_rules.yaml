@@ -1,25 +1,31 @@
 alerts:
-  - name: TODO_alert_1
-    severity: TODO
-    condition: TODO
-    duration: TODO
+  - name: slow_responses_p95_breach
+    severity: P2
+    condition: 'p95(latency_ms) of event == "response_sent" > 2000 ms'
+    duration: 5m
     type: symptom-based
     channel: slack
-    owner: TODO
+    slack_channel: "#day13-k4l3a-alerts"
+    slo: primary_slo.fast_successful_requests
+    owner: Cao Van Cuong (2A202602493) - LLMOps on-call
     runbook: docs/alerts.md#alert-1
-  - name: TODO_alert_2
-    severity: TODO
-    condition: TODO
-    duration: TODO
+  - name: request_errors_or_retrieval_down
+    severity: P1
+    condition: 'error_rate_pct > 2 OR retrieval_success_rate_pct < 90 (request_failed / request_received; tool_success)'
+    duration: 3m
     type: symptom-based
     channel: slack
-    owner: TODO
+    slack_channel: "#day13-k4l3a-alerts"
+    slo: guardrails.error_rate_pct_max, guardrails.retrieval_success_rate_pct_min
+    owner: Cao Van Cuong (2A202602493) - LLMOps on-call
     runbook: docs/alerts.md#alert-2
-  - name: TODO_alert_3
-    severity: TODO
-    condition: TODO
-    duration: TODO
+  - name: cost_per_request_spike
+    severity: P2
+    condition: 'avg(cost_usd) of event == "response_sent" > 0.005 USD per request (baseline ≈ 0.0022)'
+    duration: 10m
     type: symptom-based
     channel: slack
-    owner: TODO
+    slack_channel: "#day13-k4l3a-alerts"
+    slo: guardrails.daily_cost_usd_max
+    owner: Cao Van Cuong (2A202602493) - LLMOps on-call
     runbook: docs/alerts.md#alert-3
